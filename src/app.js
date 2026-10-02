@@ -57,10 +57,12 @@
   });
 
   solveBtn.addEventListener('click', function () {
+    var pT = DigestSolver.parsePositiveInteger(totalInput.value);
     var pA = DigestSolver.parseFragments(fragA.value);
     var pB = DigestSolver.parseFragments(fragB.value);
     var pD = DigestSolver.parseFragments(fragD.value);
     var parseIssues = [];
+    if (pT.error) parseIssues.push({ group: 'total', message: pT.error });
     if (pA.error) parseIssues.push({ group: 'A', message: pA.error });
     if (pB.error) parseIssues.push({ group: 'B', message: pB.error });
     if (pD.error) parseIssues.push({ group: 'D', message: pD.error });
@@ -70,7 +72,7 @@
       res = { status: 'invalid', issues: parseIssues };
     } else {
       res = DigestSolver.solve({
-        total: Number(totalInput.value),
+        total: pT.value,
         A: pA.values,
         B: pB.values,
         D: pD.values
@@ -136,10 +138,24 @@
   function divergenceText(div) {
     if (div.kind === 'fragment') {
       return '首个分歧：第 ' + (div.fragmentIndex + 1) + ' 个双酶切片段（起点坐标 ' +
-        div.coordinate + '）——见证1 长度 ' + div.first + '，见证2 长度 ' + div.second + '。';
+        String(div.coordinate) + '）——见证1 长度 ' + String(div.first) +
+        '，见证2 长度 ' + String(div.second) + '。';
     }
-    return '首个分歧：坐标 ' + div.coordinate + ' 处的内部切点——见证1 归属 ' +
+    return '首个分歧：坐标 ' + String(div.coordinate) + ' 处的内部切点——见证1 归属 ' +
       SITE_LABEL[div.first] + '，见证2 归属 ' + SITE_LABEL[div.second] + '。';
+  }
+
+  // flex-grow 只用于视觉比例：以最短片段为 1 等比缩放并限幅，
+  // 绝不参与任何业务计算；片段真实长度仍以十进制原文展示。
+  function flexWeights(frags) {
+    var min = frags[0];
+    frags.forEach(function (f) { if (f < min) min = f; });
+    return frags.map(function (f) {
+      var w = Number((f * 1000n) / min) / 1000;
+      if (!Number.isFinite(w) || w > 100) w = 100;
+      if (w < 1) w = 1;
+      return String(w);
+    });
   }
 
   /* 渲染一张图谱：从左端开始的双酶切片段、每个内部切点所属酶与坐标、
@@ -150,20 +166,21 @@
 
     var track = el('div', 'track');
     track.appendChild(el('span', 'coord', '0'));
+    var weights = flexWeights(map.fragments);
     map.fragments.forEach(function (len, i) {
       if (i > 0) {
         var site = map.sites[i - 1];
         var siteEl = el('span', 'site site-' + site);
         siteEl.appendChild(el('span', 'siteenzyme', SITE_LABEL[site]));
-        siteEl.appendChild(el('span', 'sitecoord', '@' + map.cuts[i - 1]));
+        siteEl.appendChild(el('span', 'sitecoord', '@' + String(map.cuts[i - 1])));
         if (div && div.kind === 'site' && div.siteIndex === i - 1) {
           siteEl.classList.add('divergent');
         }
         track.appendChild(siteEl);
       }
-      var frag = el('span', 'frag', 'D' + (i + 1) + ' · ' + len);
-      frag.style.flexGrow = String(len);
-      frag.title = '双酶切片段 D' + (i + 1) + '，长度 ' + len;
+      var frag = el('span', 'frag', 'D' + (i + 1) + ' · ' + String(len));
+      frag.style.flexGrow = weights[i];
+      frag.title = '双酶切片段 D' + (i + 1) + '，长度 ' + String(len);
       if (div && div.kind === 'fragment' && div.fragmentIndex === i) {
         frag.classList.add('divergent');
       }
@@ -201,17 +218,17 @@
   function renderMerge(title, map, runs) {
     var box = el('div', 'merge');
     box.appendChild(el('h3', null, title + '：由连续双酶切片段合并'));
-    var prefix = [0];
+    var prefix = [0n];
     map.fragments.forEach(function (f) { prefix.push(prefix[prefix.length - 1] + f); });
     var ul = el('ul');
     runs.forEach(function (run, i) {
       var parts = [];
       for (var k = run.start; k < run.end; k++) {
-        parts.push('D' + (k + 1) + '(' + map.fragments[k] + ')');
+        parts.push('D' + (k + 1) + '(' + String(map.fragments[k]) + ')');
       }
       ul.appendChild(el('li', null,
-        '片段 ' + (i + 1) + '：坐标 [' + prefix[run.start] + ', ' + prefix[run.end] +
-        ')，长度 ' + run.length + ' = ' + parts.join(' + ')));
+        '片段 ' + (i + 1) + '：坐标 [' + String(prefix[run.start]) + ', ' +
+        String(prefix[run.end]) + ')，长度 ' + String(run.length) + ' = ' + parts.join(' + ')));
     });
     box.appendChild(ul);
     return box;
