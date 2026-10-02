@@ -57,10 +57,14 @@
   });
 
   solveBtn.addEventListener('click', function () {
+    /* 录入文本直接按十进制正整数解析为 BigInt，不经过 Number，
+     * 超出 Number 安全整数范围的值也保持原十进制值。 */
+    var pT = DigestSolver.parseInteger(totalInput.value);
     var pA = DigestSolver.parseFragments(fragA.value);
     var pB = DigestSolver.parseFragments(fragB.value);
     var pD = DigestSolver.parseFragments(fragD.value);
     var parseIssues = [];
+    if (pT.error) parseIssues.push({ group: 'total', message: pT.error });
     if (pA.error) parseIssues.push({ group: 'A', message: pA.error });
     if (pB.error) parseIssues.push({ group: 'B', message: pB.error });
     if (pD.error) parseIssues.push({ group: 'D', message: pD.error });
@@ -70,7 +74,7 @@
       res = { status: 'invalid', issues: parseIssues };
     } else {
       res = DigestSolver.solve({
-        total: Number(totalInput.value),
+        total: pT.value,
         A: pA.values,
         B: pB.values,
         D: pD.values
@@ -201,7 +205,7 @@
   function renderMerge(title, map, runs) {
     var box = el('div', 'merge');
     box.appendChild(el('h3', null, title + '：由连续双酶切片段合并'));
-    var prefix = [0];
+    var prefix = [0n]; // 坐标与片段长度同为 BigInt，精确累加
     map.fragments.forEach(function (f) { prefix.push(prefix[prefix.length - 1] + f); });
     var ul = el('ul');
     runs.forEach(function (run, i) {

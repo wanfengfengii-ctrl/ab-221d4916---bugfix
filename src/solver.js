@@ -4,6 +4,11 @@
  * 输入：线性质粒构建体总长度 total，以及酶A单酶切、酶B单酶切、双酶切
  * 三组正整数片段（多重集，各自之和必须等于 total）。
  *
+ * 片段长度、总长度与坐标支持任意位数的十进制正整数：内部一律以 BigInt
+ * 精确运算，录入文本不经过 Number（避免超出 Number 安全整数范围时被
+ * 舍入）；求解结果中的片段长度、切点坐标与总长度同样以 BigInt 返回，
+ * String(...) 即为原十进制文本。
+ *
  * 在浏览器内联合枚举：
  *   1. 双酶切片段的去重排列（相同长度的片段不重复排列）；
  *   2. 每个内部切点的归属（仅酶A / 仅酶B / 双切）。
@@ -27,19 +32,40 @@
   var SITE_AB = 'AB'; // 两种酶共切
   var DEFAULT_BUDGET = 1000000; // 枚举节点预算，超出则中止
   var MAX_DOUBLE_FRAGMENTS = 12; // 双酶切片段数上限
+  var DECIMAL_RE = /^\+?\d+$/; // 十进制正整数文本（允许前导 + 与前导零）
 
-  function isPositiveInteger(x) {
+  /* 任意位数的十进制正整数 → BigInt；无法解释为正整数时返回 null。
+   * 接受 BigInt、整数值的 Number、十进制字符串三种录入形态。 */
+  function toPositiveBigInt(x) {
+    if (typeof x === 'bigint') return x > 0n ? x : null;
+    if (typeof x === 'number') {
+      return Number.isInteger(x) && x > 0 ? BigInt(x) : null;
+    }
+    if (typeof x === 'string') {
+      var t = x.trim();
+      if (!DECIMAL_RE.test(t)) return null;
+      var v = BigInt(t);
+      return v > 0n ? v : null;
+    }
+    return null;
+  }
+
+  function isBudget(x) {
     return typeof x === 'number' && Number.isInteger(x) && x > 0;
   }
 
   function sum(arr) {
-    var s = 0;
+    var s = 0n;
     for (var i = 0; i < arr.length; i++) s += arr[i];
     return s;
   }
 
+  function compareValue(a, b) {
+    return a < b ? -1 : (a > b ? 1 : 0);
+  }
+
   function sortedCopy(arr) {
-    return arr.slice().sort(function (a, b) { return a - b; });
+    return arr.slice().sort(compareValue);
   }
 
   function toCounts(arr) {
@@ -57,8 +83,8 @@
     var parts = text.split(/[\s,，、;；]+/).filter(function (p) { return p !== ''; });
     var values = [];
     for (var i = 0; i < parts.length; i++) {
-      var v = Number(parts[i]);
-      if (!isPositiveInteger(v)) {
+      var v = toPositiveBigInt(parts[i]);
+      if (v === null) {
         return { values: null, error: '“' + parts[i] + '” 不是正整数。' };
       }
       values.push(v);
@@ -66,14 +92,27 @@
     return { values: values, error: null };
   }
 
-  function validate(raw) {
-    var issues = [];
-    if (!raw || typeof raw !== 'object') {
-      return [{ group: 'input', message: '输入为空。' }];
+  function parseInteger(text) {
+    var v = typeof text === 'string' ? toPositiveBigInt(text) : null;
+    if (v === null) {
+      return { value: null, error: '总长度必须是正整数。' };
     }
-    var total = raw.total;
-    if (!isPositiveInteger(total)) {
+    return { value: v, error: null };
+  }
+
+  /* 校验并把全部录入规范化为 BigInt；issues 非空即为 invalid。 */
+  function normalize(raw) {
+    var result = { issues: [], total: null, A: null, B: null, D: null };
+    var issues = result.issues;
+    if (!raw || typeof raw !== 'object') {
+      issues.push({ group: 'input', message: '输入为空。' });
+      return result;
+    }
+    var total = toPositiveBigInt(raw.total);
+    if (total === null) {
       issues.push({ group: 'total', message: '总长度必须是正整数。' });
+    } else {
+      result.total = total;
     }
     var groups = [
       ['A', raw.A, '酶A单酶切'],
@@ -86,16 +125,20 @@
         issues.push({ group: key, message: label + '片段列表为空。' });
         return;
       }
+      var values = [];
       for (var i = 0; i < arr.length; i++) {
-        if (!isPositiveInteger(arr[i])) {
+        var v = toPositiveBigInt(arr[i]);
+        if (v === null) {
           issues.push({ group: key, message: label + '第 ' + (i + 1) + ' 个片段不是正整数。' });
           return;
         }
+        values.push(v);
       }
-      if (isPositiveInteger(total) && sum(arr) !== total) {
+      result[key] = values;
+      if (total !== null && sum(values) !== total) {
         issues.push({
           group: key,
-          message: label + '片段长度之和为 ' + sum(arr) + '，与总长度 ' + total + ' 不一致。'
+          message: label + '片段长度之和为 ' + sum(values) + '，与总长度 ' + total + ' 不一致。'
         });
       }
     });
@@ -105,7 +148,7 @@
         message: '双酶切片段数 ' + raw.D.length + ' 超过上限 ' + MAX_DOUBLE_FRAGMENTS + '。'
       });
     }
-    return issues;
+    return result;
   }
 
   /* ---------- 图谱表示 ---------- */
@@ -118,6 +161,14 @@
       t.push(frags[i + 1]);
     }
     return t;
+  }
+
+  // 令牌的字符串键：片段为十进制数字、切点为字母，二者不会混淆。
+  function tokensKey(frags, sts) {
+    var t = tokensOf(frags, sts);
+    var parts = new Array(t.length);
+    for (var i = 0; i < t.length; i++) parts[i] = String(t[i]);
+    return parts.join('|');
   }
 
   // 某单酶切的片段如何由连续双酶切片段合并得到：
@@ -142,12 +193,12 @@
 
   function makeMap(frags, sts) {
     var cuts = [];
-    var pos = 0;
+    var pos = 0n;
     for (var i = 0; i < sts.length; i++) {
       pos += frags[i];
       cuts.push(pos);
     }
-    var total = pos + (frags.length ? frags[frags.length - 1] : 0);
+    var total = pos + (frags.length ? frags[frags.length - 1] : 0n);
     return {
       fragments: frags,
       sites: sts,
@@ -163,8 +214,8 @@
   function canonical(frags, sts) {
     var rf = frags.slice().reverse();
     var rs = sts.slice().reverse();
-    var k1 = JSON.stringify(tokensOf(frags, sts));
-    var k2 = JSON.stringify(tokensOf(rf, rs));
+    var k1 = tokensKey(frags, sts);
+    var k2 = tokensKey(rf, rs);
     if (k1 <= k2) return { key: k1, frags: frags.slice(), sts: sts.slice() };
     return { key: k2, frags: rf, sts: rs };
   }
@@ -183,7 +234,7 @@
     var budget = cfg.budget;
 
     var counts = toCounts(cfg.D);
-    var dValues = Array.from(counts.keys()).sort(function (a, b) { return a - b; });
+    var dValues = Array.from(counts.keys()).sort(compareValue);
     var dLeft = dValues.map(function (v) { return counts.get(v); });
 
     var aLeft = trackA ? toCounts(cfg.A) : null;
@@ -193,8 +244,8 @@
 
     var fragments = new Array(n);
     var sites = new Array(Math.max(0, n - 1));
-    var runA = 0; // 当前未闭合的酶A片段累计长度
-    var runB = 0;
+    var runA = 0n; // 当前未闭合的酶A片段累计长度
+    var runB = 0n;
     var nodes = 0;
     var aborted = false;
     var stop = false;
@@ -202,7 +253,7 @@
     var classes = new Map();
 
     function maxRemaining(left) {
-      var mx = 0;
+      var mx = 0n;
       left.forEach(function (c, v) { if (c > 0 && v > mx) mx = v; });
       return mx;
     }
@@ -244,8 +295,8 @@
       }
 
       if (depth === 0) {
-        var maxA0 = trackA ? maxRemaining(aLeft) : 0;
-        var maxB0 = trackB ? maxRemaining(bLeft) : 0;
+        var maxA0 = trackA ? maxRemaining(aLeft) : 0n;
+        var maxB0 = trackB ? maxRemaining(bLeft) : 0n;
         for (var i = 0; i < dValues.length; i++) {
           if (dLeft[i] === 0) continue;
           var v0 = dValues[i];
@@ -289,7 +340,7 @@
           if (closeRun(aLeft, runA)) {
             aClosed = true;
             aLeftCount--;
-            runA = 0;
+            runA = 0n;
           } else {
             okSite = false;
           }
@@ -298,7 +349,7 @@
           if (closeRun(bLeft, runB)) {
             bClosed = true;
             bLeftCount--;
-            runB = 0;
+            runB = 0n;
           } else {
             okSite = false;
           }
@@ -316,8 +367,8 @@
             (!collect || aNeed + bNeed >= sitesLeft);
           if (feasible) {
             if (collect) sites[siteIdx] = opt;
-            var maxA = trackA ? maxRemaining(aLeft) : 0;
-            var maxB = trackB ? maxRemaining(bLeft) : 0;
+            var maxA = trackA ? maxRemaining(aLeft) : 0n;
+            var maxB = trackB ? maxRemaining(bLeft) : 0n;
             for (var j = 0; j < dValues.length; j++) {
               if (dLeft[j] === 0) continue;
               var v = dValues[j];
@@ -362,7 +413,7 @@
     var len = Math.min(t1.length, t2.length);
     for (var i = 0; i < len; i++) {
       if (t1[i] !== t2[i]) {
-        var coordinate = 0;
+        var coordinate = 0n;
         var k;
         if (i % 2 === 0) {
           var fi = i / 2;
@@ -401,14 +452,14 @@
   }
 
   function solve(raw) {
-    var issues = validate(raw);
-    if (issues.length) return { status: 'invalid', issues: issues };
+    var norm = normalize(raw);
+    if (norm.issues.length) return { status: 'invalid', issues: norm.issues };
 
-    var total = raw.total;
-    var A = sortedCopy(raw.A);
-    var B = sortedCopy(raw.B);
-    var D = sortedCopy(raw.D);
-    var budget = isPositiveInteger(raw.budget) ? raw.budget : DEFAULT_BUDGET;
+    var total = norm.total;
+    var A = sortedCopy(norm.A);
+    var B = sortedCopy(norm.B);
+    var D = sortedCopy(norm.D);
+    var budget = isBudget(raw.budget) ? raw.budget : DEFAULT_BUDGET;
 
     // 阶段一：酶A单酶切能否由双酶切片段连续合并得到
     if (A.length > D.length) {
@@ -465,6 +516,7 @@
   return {
     solve: solve,
     parseFragments: parseFragments,
+    parseInteger: parseInteger,
     divergence: divergence,
     SITE_A: SITE_A,
     SITE_B: SITE_B,
